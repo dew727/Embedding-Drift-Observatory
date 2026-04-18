@@ -1,0 +1,13 @@
+.env
+__pycache__/
+*.py[cod]
+*.pth
+*.pt
+data/raw/
+data/processed/
+.ipynb_checkpoints/
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
