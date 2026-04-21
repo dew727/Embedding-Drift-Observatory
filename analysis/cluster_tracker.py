@@ -17,13 +17,13 @@ class ClusterTracker:
     def fit(self, baseline_emb: np.ndarray) -> "ClusterTracker":
         """Fit k-means on baseline embeddings. Frozen after this call."""
         self._kmeans = KMeans(n_clusters=self.n_clusters, random_state=self.random_state, n_init="auto")
-        self.baseline_labels_ = self._kmeans.fit_predict(baseline_emb)
+        self.baseline_labels_ = self._kmeans.fit_predict(baseline_emb.astype(np.float64))
         self.baseline_centroids_ = self._kmeans.cluster_centers_.copy()
         return self
 
     def predict(self, emb: np.ndarray) -> np.ndarray:
         """Assign embeddings to baseline clusters (no refit)."""
-        return self._kmeans.predict(emb)
+        return self._kmeans.predict(emb.astype(np.float64))
 
     def centroid_shift(self, emb: np.ndarray) -> np.ndarray:
         """Mean distance each cluster centroid has moved (using current batch embeddings).

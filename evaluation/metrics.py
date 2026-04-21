@@ -2,7 +2,8 @@
 
 import numpy as np
 from dataclasses import dataclass
-from sklearn.metrics import roc_auc_score, f1_score, accuracy_score, calibration_curve
+from sklearn.metrics import roc_auc_score, f1_score, accuracy_score
+from sklearn.calibration import calibration_curve
 from sklearn.base import ClassifierMixin
 
 
