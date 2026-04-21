@@ -7,7 +7,7 @@ Never refit mid-pipeline — that would mask true drift signal.
 import numpy as np
 import torch
 from embeddings.pca import PCA
-from embeddings.autoencoder import Autoencoder
+from embeddings.autoencoder import Autoencoder, train_autoencoder
 
 
 class EmbeddingPipeline:
@@ -46,26 +46,17 @@ class EmbeddingPipeline:
                 return self._model.encode(X_tensor).numpy()
 
     def _train_autoencoder(self, X: np.ndarray) -> Autoencoder:
-        input_dim = X.shape[1]
-        latent_dim = self.n_components
-        hidden_dims = self.kwargs.get("hidden_dims", [128, 64])
-        lr = self.kwargs.get("lr", 1e-3)
-        epochs = self.kwargs.get("epochs", 50)
-        batch_size = self.kwargs.get("batch_size", 64)
-
-        model = Autoencoder(input_dim, latent_dim, hidden_dims)
-        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-        criterion = torch.nn.MSELoss()
-        X_tensor = torch.tensor(X, dtype=torch.float32)
-
-        model.train()
-        for _ in range(epochs):
-            for i in range(0, len(X_tensor), batch_size):
-                batch = X_tensor[i : i + batch_size]
-                x_hat, _ = model(batch)
-                loss = criterion(x_hat, batch)
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-        model.eval()
-        return model
+        model = Autoencoder(
+            input_dim=X.shape[1],
+            latent_dim=self.n_components,
+            hidden_dims=self.kwargs.get("hidden_dims", [128, 64]),
+            dropout=self.kwargs.get("dropout", 0.1),
+        )
+        return train_autoencoder(
+            model,
+            X,
+            epochs=self.kwargs.get("epochs", 50),
+            batch_size=self.kwargs.get("batch_size", 64),
+            lr=self.kwargs.get("lr", 1e-3),
+            patience=self.kwargs.get("patience", 5),
+        )
