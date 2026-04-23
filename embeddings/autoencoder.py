@@ -1,142 +1,134 @@
-"""PyTorch autoencoder for learning dense embeddings from tabular data."""
+import numpy as np
 
-import torch
-import torch.nn as nn
-
-
-def _build_block(in_dim: int, out_dim: int, dropout: float) -> list[nn.Module]:
-    """Linear → BatchNorm → ReLU → Dropout block."""
-    layers = [nn.Linear(in_dim, out_dim), nn.BatchNorm1d(out_dim), nn.ReLU()]
-    if dropout > 0:
-        layers.append(nn.Dropout(dropout))
-    return layers
-
-
-class Autoencoder(nn.Module):
-    """Encoder-decoder autoencoder for tabular data.
-
-    The encoder output (latent vector) is the embedding used downstream.
-    BatchNorm stabilizes training on heterogeneous tabular features;
-    Dropout regularizes against overfitting on small datasets.
-    """
-
-    def __init__(
-        self,
-        input_dim: int,
-        latent_dim: int,
-        hidden_dims: list[int] = None,
-        dropout: float = 0.1,
-    ):
+class Autoencoder:
+    def __init__(self, input_dim, hidden_dims, latent_dim, lr=0.001):
         """
-        Args:
-            input_dim: Number of input features.
-            latent_dim: Size of the bottleneck embedding.
-            hidden_dims: Layer sizes for the encoder; decoder mirrors these in reverse.
-            dropout: Dropout rate applied after each hidden activation (0 = disabled).
+        input_dim: d (original space R^d)
+        hidden_dims: list of hidden layer sizes
+        latent_dim: k (latent space R^k, where k << d)
         """
-        super().__init__()
-        if hidden_dims is None:
-            hidden_dims = [128, 64]
+        self.lr = lr
+        
+        # Build encoder layer dims: d -> hidden -> k
+        enc_dims = [input_dim] + hidden_dims + [latent_dim]
+        # Build decoder layer dims: k -> hidden (reversed) -> d
+        dec_dims = [latent_dim] + hidden_dims[::-1] + [input_dim]
+        
+        # Initialize weights (He initialization, good for ReLU)
+        self.enc_W = [np.random.randn(enc_dims[i+1], enc_dims[i]) * np.sqrt(2/enc_dims[i]) 
+                      for i in range(len(enc_dims)-1)]
+        self.enc_b = [np.zeros((enc_dims[i+1], 1)) 
+                      for i in range(len(enc_dims)-1)]
+        
+        self.dec_W = [np.random.randn(dec_dims[i+1], dec_dims[i]) * np.sqrt(2/dec_dims[i]) 
+                      for i in range(len(dec_dims)-1)]
+        self.dec_b = [np.zeros((dec_dims[i+1], 1)) 
+                      for i in range(len(dec_dims)-1)]
 
-        # Encoder: input → hidden_dims → latent
-        enc_layers = []
-        prev = input_dim
-        for h in hidden_dims:
-            enc_layers.extend(_build_block(prev, h, dropout))
-            prev = h
-        enc_layers.append(nn.Linear(prev, latent_dim))
-        self.encoder = nn.Sequential(*enc_layers)
+    # forward pass activations
+    def relu(self, a):
+        return np.maximum(0, a)
 
-        # Decoder: latent → reversed hidden_dims → input (no final activation — raw reconstruction)
-        dec_layers = []
-        prev = latent_dim
-        for h in reversed(hidden_dims):
-            dec_layers.extend(_build_block(prev, h, dropout))
-            prev = h
-        dec_layers.append(nn.Linear(prev, input_dim))
-        self.decoder = nn.Sequential(*dec_layers)
+    def relu_grad(self, a):
+        # Sub-derivative: 0 if a < 0, 1 if a > 0, any value in [0,1] at a=0
+        return (a > 0).astype(float)
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Returns (reconstruction, latent_embedding)."""
-        z = self.encoder(x)
-        x_hat = self.decoder(z)
-        return x_hat, z
+    # ---------- Forward pass ----------
+    def encode(self, x):
+        """
+        Implements F(x) = U_L * ReLU(U_{L-1} * ReLU(... U_0*x + b_0 ...) + b_{L-1}) + b_L
+        Returns latent z and cache of pre/post activations for backprop
+        """
+        cache = []
+        h = x
+        for i, (W, b) in enumerate(zip(self.enc_W, self.enc_b)):
+            pre = W @ h + b                          # linear transform
+            post = self.relu(pre) if i < len(self.enc_W)-1 else pre  # no ReLU on last layer
+            cache.append((h, pre))
+            h = post
+        return h, cache  # h = z (latent vector)
 
-    def encode(self, x: torch.Tensor) -> torch.Tensor:
-        """Return the latent embedding only. Used by EmbeddingPipeline.transform()."""
-        return self.encoder(x)
+    def decode(self, z):
+        """
+        Implements G(z) = W_L * ReLU(W_{L-1} * ReLU(... W_0*z + c_0 ...) + c_{L-1}) + c_L
+        Returns reconstruction x_hat and cache
+        """
+        cache = []
+        h = z
+        for i, (W, b) in enumerate(zip(self.dec_W, self.dec_b)):
+            pre = W @ h + b
+            post = self.relu(pre) if i < len(self.dec_W)-1 else pre  # no ReLU on last layer
+            cache.append((h, pre))
+            h = post
+        return h, cache  # h = x_hat
 
+    def forward(self, x):
+        z, enc_cache = self.encode(x)
+        x_hat, dec_cache = self.decode(z)
+        return x_hat, z, enc_cache, dec_cache
 
-def train_autoencoder(
-    model: Autoencoder,
-    X: "np.ndarray",  # noqa: F821
-    *,
-    epochs: int = 50,
-    batch_size: int = 64,
-    lr: float = 1e-3,
-    patience: int = 5,
-    val_fraction: float = 0.1,
-    device: str = "cpu",
-) -> Autoencoder:
-    """Train an Autoencoder on baseline data with early stopping.
+    # loss function
+    def mse_loss(self, x, x_hat):
+        # (1/N) * sum ||x_n - G(F(x_n))||^2  — from your professor's objective
+        return np.mean(np.sum((x - x_hat)**2, axis=0))
 
-    Args:
-        model: Autoencoder instance to train in-place.
-        X: Baseline feature matrix (n_samples, n_features), already normalized.
-        epochs: Maximum training epochs.
-        batch_size: Mini-batch size.
-        lr: Adam learning rate.
-        patience: Early-stop after this many epochs with no val-loss improvement.
-        val_fraction: Fraction of X held out for early-stopping validation.
-        device: 'cpu' or 'cuda'.
+    # backwards pass
+    def backward(self, x, x_hat, enc_cache, dec_cache):
+        N = x.shape[1]
 
-    Returns:
-        Trained model in eval() mode.
-    """
-    import numpy as np
+        # Gradient of MSE loss w.r.t. x_hat: dL/dx_hat = -(2/N)(x - x_hat)
+        grad = -(2 / N) * (x - x_hat)
 
-    model = model.to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    criterion = nn.MSELoss()
+        # decoder backprop
+        dec_dW, dec_db = [], []
+        for i in reversed(range(len(self.dec_W))):
+            h_prev, pre = dec_cache[i]
+            # Apply ReLU gradient (skip on last layer — no activation there)
+            if i < len(self.dec_W) - 1:
+                grad = grad * self.relu_grad(pre)
+            dW = grad @ h_prev.T
+            db = np.sum(grad, axis=1, keepdims=True)
+            grad = self.dec_W[i].T @ grad   # pass gradient back through weights
+            dec_dW.insert(0, dW)
+            dec_db.insert(0, db)
 
-    # Hold out a small validation split for early stopping
-    n = len(X)
-    n_val = max(1, int(n * val_fraction))
-    rng = np.random.default_rng(42)
-    idx = rng.permutation(n)
-    X_train = torch.tensor(X[idx[n_val:]], dtype=torch.float32, device=device)
-    X_val = torch.tensor(X[idx[:n_val]], dtype=torch.float32, device=device)
+        # grad is now dL/dz — passes into encoder
+        # encoder backprop
+        enc_dW, enc_db = [], []
+        for i in reversed(range(len(self.enc_W))):
+            h_prev, pre = enc_cache[i]
+            if i < len(self.enc_W) - 1:
+                grad = grad * self.relu_grad(pre)
+            dW = grad @ h_prev.T
+            db = np.sum(grad, axis=1, keepdims=True)
+            grad = self.enc_W[i].T @ grad
+            enc_dW.insert(0, dW)
+            enc_db.insert(0, db)
 
-    best_val_loss = float("inf")
-    epochs_no_improve = 0
-    best_state = None
+        return enc_dW, enc_db, dec_dW, dec_db
 
-    for epoch in range(epochs):
-        model.train()
-        perm = torch.randperm(len(X_train), device=device)
-        for i in range(0, len(X_train), batch_size):
-            batch = X_train[perm[i : i + batch_size]]
-            x_hat, _ = model(batch)
-            loss = criterion(x_hat, batch)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+    # update
+    def step(self, enc_dW, enc_db, dec_dW, dec_db):
+        for i in range(len(self.enc_W)):
+            self.enc_W[i] -= self.lr * enc_dW[i]
+            self.enc_b[i] -= self.lr * enc_db[i]
+        for i in range(len(self.dec_W)):
+            self.dec_W[i] -= self.lr * dec_dW[i]
+            self.dec_b[i] -= self.lr * dec_db[i]
 
-        # Validation
-        model.eval()
-        with torch.no_grad():
-            val_loss = criterion(model(X_val)[0], X_val).item()
-
-        if val_loss < best_val_loss - 1e-6:
-            best_val_loss = val_loss
-            epochs_no_improve = 0
-            best_state = {k: v.clone() for k, v in model.state_dict().items()}
-        else:
-            epochs_no_improve += 1
-            if epochs_no_improve >= patience:
-                break
-
-    if best_state is not None:
-        model.load_state_dict(best_state)
-    model.eval()
-    return model
+    # training loop
+    def train(self, X, epochs=500, batch_size=64):
+        """
+        X: shape (d, N) — each column is one sample
+        """
+        N = X.shape[1]
+        for epoch in range(epochs):
+            # shuffle
+            idx = np.random.permutation(N)
+            X_shuffled = X[:, idx]
+            
+            for i in range(0, N, batch_size):
+                batch_X = X_shuffled[:, i:i+batch_size]
+                x_hat, z, enc_cache, dec_cache = self.forward(batch_X)
+                enc_dW, enc_db, dec_dW, dec_db = self.backward(batch_X, x_hat, enc_cache, dec_cache)
+                self.step(enc_dW, enc_db, dec_dW, dec_db)

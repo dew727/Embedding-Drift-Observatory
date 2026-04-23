@@ -5,9 +5,8 @@ Never refit mid-pipeline — that would mask true drift signal.
 """
 
 import numpy as np
-import torch
 from embeddings.pca import PCA
-from embeddings.autoencoder import Autoencoder, train_autoencoder
+from embeddings.autoencoder import Autoencoder
 
 
 class EmbeddingPipeline:
@@ -41,22 +40,25 @@ class EmbeddingPipeline:
         if self.method == "pca":
             return self._model.transform(X)
         elif self.method == "autoencoder":
-            X_tensor = torch.tensor(X, dtype=torch.float32)
-            with torch.no_grad():
-                return self._model.encode(X_tensor).numpy()
+            # X has shape (N, d). The custom NumPy autoencoder encode() method 
+            # takes input of shape (d, N) and returns (h, cache).
+            # We want the latent representation h, which has shape (k, N), 
+            # and we must transpose it back to (N, k).
+            h, _ = self._model.encode(X.T)
+            return h.T
 
     def _train_autoencoder(self, X: np.ndarray) -> Autoencoder:
         model = Autoencoder(
             input_dim=X.shape[1],
             latent_dim=self.n_components,
             hidden_dims=self.kwargs.get("hidden_dims", [128, 64]),
-            dropout=self.kwargs.get("dropout", 0.1),
+            lr=self.kwargs.get("lr", 0.001)
         )
-        return train_autoencoder(
-            model,
-            X,
+        
+        # X has shape (N, d). The train method expects (d, N).
+        model.train(
+            X.T,
             epochs=self.kwargs.get("epochs", 50),
-            batch_size=self.kwargs.get("batch_size", 64),
-            lr=self.kwargs.get("lr", 1e-3),
-            patience=self.kwargs.get("patience", 5),
+            batch_size=self.kwargs.get("batch_size", 64)
         )
+        return model
