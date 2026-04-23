@@ -46,9 +46,13 @@ def evaluate_batch(
     else:
         auc = roc_auc_score(y, y_proba, multi_class="ovr", average="macro")
 
+    # FIXED (Ryan): calibration_curve crashes when labels aren't {0,1} (e.g. {1,2}) — pass pos_label explicitly
+    classes = clf.classes_
+    pos_label = classes[1] if y_proba.shape[1] == 2 else None
     frac_pos, mean_pred = calibration_curve(
         y, y_proba[:, 1] if y_proba.shape[1] == 2 else y_proba.max(axis=1),
         n_bins=n_calibration_bins,
+        pos_label=pos_label,
     )
 
     return BatchMetrics(

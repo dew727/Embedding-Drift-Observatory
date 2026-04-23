@@ -4,6 +4,10 @@ Run with:
     streamlit run app/main.py
 """
 
+import sys, os
+# ADDED (Ryan): fixes ModuleNotFoundError when running `streamlit run app/main.py` from project root
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import numpy as np
 import streamlit as st
 
@@ -176,6 +180,87 @@ if "results" not in st.session_state:
     st.stop()
 
 baseline_emb, batch_results, perf_tracker = st.session_state["results"]
+
+
+# ADDED (Ryan): classifies drift severity and recommends whether to retrain, monitor, or do nothing
+def _retrain_verdict(batch_results):
+    """Classify whether drift warrants retraining based on geometry + performance signals."""
+    scores = [r.drift_score.score for r in batch_results]
+    accs = [r.metrics.accuracy for r in batch_results if not np.isnan(r.metrics.accuracy)]
+    aucs = [r.metrics.roc_auc for r in batch_results if not np.isnan(r.metrics.roc_auc)]
+    ni_vals = [r.neighbor_instability for r in batch_results]
+
+    peak_drift = max(scores)
+    max_ni = max(ni_vals)
+    acc_drop = (accs[0] - min(accs)) if len(accs) >= 2 else 0.0
+    auc_drop = (aucs[0] - min(aucs)) if len(aucs) >= 2 else 0.0
+
+    signals = []
+    if peak_drift > 0.4:
+        signals.append(f"peak drift score {peak_drift:.2f}")
+    if max_ni > 0.4:
+        signals.append(f"neighbor instability {max_ni:.2f}")
+    if acc_drop > 0.10:
+        signals.append(f"accuracy dropped {acc_drop:.0%}")
+    if auc_drop > 0.10:
+        signals.append(f"AUC dropped {auc_drop:.2f}")
+
+    geometry_alarm = peak_drift > 0.4 or max_ni > 0.4
+    perf_alarm = acc_drop > 0.10 or auc_drop > 0.10
+    geometry_warn = peak_drift > 0.2 or max_ni > 0.2
+    perf_warn = acc_drop > 0.05 or auc_drop > 0.05
+
+    if geometry_alarm and perf_alarm:
+        verdict = "retrain"
+        label = "Retraining Recommended"
+        reason = (
+            "Both embedding geometry and classifier performance have degraded significantly. "
+            f"Triggered by: {', '.join(signals)}. "
+            "The model's internal representations no longer reflect the current data distribution — retraining on recent data is advised."
+        )
+    elif geometry_alarm and not perf_alarm:
+        verdict = "monitor"
+        label = "Monitor Closely — Geometric Drift Detected"
+        reason = (
+            "Embedding geometry has shifted substantially but classifier performance is still holding. "
+            f"Triggered by: {', '.join(signals) if signals else 'elevated drift score'}. "
+            "This is an early warning: performance degradation may follow. Schedule a retraining review."
+        )
+    elif geometry_warn or perf_warn:
+        verdict = "monitor"
+        label = "Mild Drift — Continue Monitoring"
+        reason = (
+            "Moderate drift detected in embedding space or performance metrics, but below retraining thresholds. "
+            "Keep monitoring across future batches before taking action."
+        )
+    else:
+        verdict = "stable"
+        label = "No Retraining Needed"
+        reason = (
+            "Embedding geometry and classifier performance are stable across all batches. "
+            "Distribution shift is within acceptable bounds."
+        )
+
+    return verdict, label, reason, {
+        "Peak Drift Score": f"{peak_drift:.3f}",
+        "Max Neighbor Instability": f"{max_ni:.3f}",
+        "Accuracy Drop": f"{acc_drop:.1%}",
+        "AUC Drop": f"{auc_drop:.3f}",
+    }
+
+
+verdict, label, reason, signal_vals = _retrain_verdict(batch_results)
+
+_colors = {"retrain": "error", "monitor": "warning", "stable": "success"}
+_icons  = {"retrain": "🔴", "monitor": "🟡", "stable": "🟢"}
+getattr(st, _colors[verdict])(f"**{_icons[verdict]} Retraining Verdict: {label}**\n\n{reason}")
+
+with st.expander("Signal breakdown"):
+    cols = st.columns(len(signal_vals))
+    for col, (k, v) in zip(cols, signal_vals.items()):
+        col.metric(k, v)
+
+st.divider()
 
 # Aggregate drift score banner
 scores = [r.drift_score.score for r in batch_results]
