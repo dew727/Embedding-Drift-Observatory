@@ -1,5 +1,3 @@
-"""Per-batch evaluation metrics: ROC-AUC, F1, accuracy, calibration."""
-
 import numpy as np
 from dataclasses import dataclass
 from sklearn.metrics import roc_auc_score, f1_score, accuracy_score
@@ -13,7 +11,6 @@ class BatchMetrics:
     accuracy: float
     f1: float
     roc_auc: float
-    # Calibration curve points
     fraction_of_positives: np.ndarray = None
     mean_predicted_value: np.ndarray = None
 
@@ -25,35 +22,46 @@ def evaluate_batch(
     batch_index: int,
     n_calibration_bins: int = 10,
 ) -> BatchMetrics:
-    """Evaluate a frozen classifier on one drifted batch.
+    X = np.asarray(X)
+    y = np.asarray(y).ravel()
 
-    Args:
-        clf: Trained (frozen) classifier.
-        X: Batch embeddings.
-        y: Batch labels.
-        batch_index: Temporal index of this batch.
-        n_calibration_bins: Bins for calibration curve.
+    if X.ndim != 2:
+        raise ValueError(f"X must be 2D, got shape {X.shape}.")
+    if y.ndim != 1:
+        raise ValueError(f"y must be 1D, got shape {y.shape}.")
+    if len(X) != len(y):
+        raise ValueError(f"X and y must have the same number of samples. Got {len(X)} and {len(y)}.")
 
-    Returns:
-        BatchMetrics for this batch.
-    """
     y_pred = clf.predict(X)
+
+    if not hasattr(clf, "predict_proba"):
+        raise ValueError("Classifier must support predict_proba for evaluation.")
+
     y_proba = clf.predict_proba(X)
 
-    # ROC-AUC: handle binary vs. multiclass
-    if y_proba.shape[1] == 2:
-        auc = roc_auc_score(y, y_proba[:, 1])
-    else:
-        auc = roc_auc_score(y, y_proba, multi_class="ovr", average="macro")
+    try:
+        if y_proba.shape[1] == 2:
+            auc = roc_auc_score(y, y_proba[:, 1])
+        else:
+            auc = roc_auc_score(y, y_proba, multi_class="ovr", average="macro")
+    except ValueError:
+        auc = float("nan")
 
-    # FIXED (Ryan): calibration_curve crashes when labels aren't {0,1} (e.g. {1,2}) — pass pos_label explicitly
-    classes = clf.classes_
-    pos_label = classes[1] if y_proba.shape[1] == 2 else None
-    frac_pos, mean_pred = calibration_curve(
-        y, y_proba[:, 1] if y_proba.shape[1] == 2 else y_proba.max(axis=1),
-        n_bins=n_calibration_bins,
-        pos_label=pos_label,
-    )
+    frac_pos = None
+    mean_pred = None
+
+    if y_proba.shape[1] == 2:
+        try:
+            classes = clf.classes_
+            pos_label = classes[1]
+            frac_pos, mean_pred = calibration_curve(
+                y,
+                y_proba[:, 1],
+                n_bins=n_calibration_bins,
+                pos_label=pos_label,
+            )
+        except ValueError:
+            frac_pos, mean_pred = None, None
 
     return BatchMetrics(
         batch_index=batch_index,
