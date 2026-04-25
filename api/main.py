@@ -45,6 +45,8 @@ app.add_middleware(
 
 # In-memory store for uploaded dataframes keyed by upload_id
 _uploads: dict[str, pd.DataFrame] = {}
+MAX_BASELINE_SCATTER_POINTS = 600
+MAX_BATCH_SCATTER_POINTS = 240
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +86,23 @@ def _to_list(arr) -> list:
 def _emb_2d(emb: np.ndarray) -> list[list[float]]:
     """Return first 2 dimensions of embeddings for scatter plot."""
     return emb[:, :2].tolist()
+
+
+def _sample_embedding_pairs(
+    baseline_emb: np.ndarray,
+    drift_emb: np.ndarray,
+    max_points: int,
+) -> tuple[list[list[float]], list[list[float]]]:
+    """Sample matching baseline/drift points for response payloads."""
+    if len(baseline_emb) != len(drift_emb):
+        raise ValueError("baseline and drift embeddings must have the same length")
+
+    if len(baseline_emb) <= max_points:
+        indices = np.arange(len(baseline_emb))
+    else:
+        indices = np.random.choice(len(baseline_emb), size=max_points, replace=False)
+
+    return _emb_2d(baseline_emb[indices]), _emb_2d(drift_emb[indices])
 
 
 def _retrain_verdict(batch_results_data: list[dict]) -> dict:
@@ -268,10 +287,16 @@ def run(req: RunRequest) -> dict[str, Any]:
         if metrics:
             perf_tracker.log(metrics)
 
+        sampled_baseline_2d, sampled_drift_2d = _sample_embedding_pairs(
+            orig_emb,
+            drift_emb,
+            max_points=MAX_BATCH_SCATTER_POINTS,
+        )
+
         batch_results.append({
             "index":               i,
-            "emb_2d":              _emb_2d(drift_emb),
-            "baseline_emb_2d":     _emb_2d(orig_emb),
+            "emb_2d":              sampled_drift_2d,
+            "baseline_emb_2d":     sampled_baseline_2d,
             "drift_score":         round(drift_score.score, 4),
             "mean_cosine_shift":   round(drift_score.mean_cosine_shift, 4),
             "mean_euclidean_shift": round(drift_score.mean_euclidean_shift, 4),
@@ -298,8 +323,12 @@ def run(req: RunRequest) -> dict[str, Any]:
     summary = perf_tracker.summary()
     verdict = _retrain_verdict(batch_results)
 
-    # Cap scatter points at 2000 so the response stays small regardless of dataset size
-    scatter_idx = np.random.choice(len(baseline_emb), size=min(2000, len(baseline_emb)), replace=False)
+    # Keep the baseline scatter compact so large uploads do not exhaust container memory.
+    scatter_idx = np.random.choice(
+        len(baseline_emb),
+        size=min(MAX_BASELINE_SCATTER_POINTS, len(baseline_emb)),
+        replace=False,
+    )
     baseline_emb_2d_sample = _emb_2d(baseline_emb[scatter_idx])
 
     return {

@@ -1,8 +1,10 @@
 .env
+.DS_Store
 __pycache__/
 *.py[cod]
 *.pth
 *.pt
+node_modules/
 data/raw/
 data/processed/
 .ipynb_checkpoints/

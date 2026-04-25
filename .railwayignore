@@ -1,0 +1,6 @@
+.git
+.DS_Store
+embedding-monitor/node_modules
+embedding-monitor/dist
+embedding-monitor/.DS_Store
+notebooks
