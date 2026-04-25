@@ -53,21 +53,21 @@ with st.sidebar:
     st.header("3 · Classifier")
     clf_kind = st.selectbox("Classifier", ["logistic", "mlp"])
 
-    st.header("4 · Drift Simulation")
-    n_batches = st.slider("Number of batches", min_value=2, max_value=20, value=8)
+    st.header("4 · Population Shift Simulation")
+    n_batches = st.slider("Number of patient cohorts", min_value=2, max_value=20, value=8)
 
-    with st.expander("Drift settings (applied uniformly to all batches)"):
+    with st.expander("Shift settings (applied uniformly to all cohorts)"):
         covariate_strength = st.slider("Covariate shift strength", 0.0, 3.0, 1.0, 0.1)
-        enable_prior = st.checkbox("Prior shift", value=False)
-        prior_ratio = st.slider("Prior ratio (majority class)", 0.5, 0.99, 0.8, 0.01) if enable_prior else None
-        concept_flip = st.slider("Concept drift (label flip rate)", 0.0, 0.5, 0.0, 0.05)
-        noise_std = st.slider("Gaussian noise std", 0.0, 1.0, 0.1, 0.05)
-        missing_rate = st.slider("Missingness rate", 0.0, 0.5, 0.0, 0.05)
+        enable_prior = st.checkbox("Prior shift (class imbalance)", value=False)
+        prior_ratio = st.slider("Majority class prevalence", 0.5, 0.99, 0.8, 0.01) if enable_prior else None
+        concept_flip = st.slider("Concept drift (outcome flip rate)", 0.0, 0.5, 0.0, 0.05)
+        noise_std = st.slider("Measurement noise std", 0.0, 1.0, 0.1, 0.05)
+        missing_rate = st.slider("Missing data rate", 0.0, 0.5, 0.0, 0.05)
 
-    n_clusters = st.slider("k-means clusters (analysis)", min_value=2, max_value=16, value=6)
+    n_clusters = st.slider("Patient subgroups (k-means)", min_value=2, max_value=16, value=6)
 
     st.divider()
-    run_clicked = st.button("▶ Run Pipeline", type="primary", disabled=(df is None))
+    run_clicked = st.button("▶ Run Analysis", type="primary", disabled=(df is None))
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +173,7 @@ if run_clicked and df is not None:
 # ---------------------------------------------------------------------------
 
 st.title("🔭 Embedding Drift Observatory")
-st.caption("Representation Stability Under Distribution Shift")
+st.caption("Clinical Model Stability Under Patient Population Shift")
 
 if "results" not in st.session_state:
     st.info("Configure the pipeline in the sidebar and click **▶ Run Pipeline** to begin.")
@@ -197,13 +197,13 @@ def _retrain_verdict(batch_results):
 
     signals = []
     if peak_drift > 0.4:
-        signals.append(f"peak drift score {peak_drift:.2f}")
+        signals.append(f"population drift index {peak_drift:.2f}")
     if max_ni > 0.4:
-        signals.append(f"neighbor instability {max_ni:.2f}")
+        signals.append(f"patient similarity instability {max_ni:.2f}")
     if acc_drop > 0.10:
-        signals.append(f"accuracy dropped {acc_drop:.0%}")
+        signals.append(f"diagnostic accuracy declined {acc_drop:.0%}")
     if auc_drop > 0.10:
-        signals.append(f"AUC dropped {auc_drop:.2f}")
+        signals.append(f"discriminative performance declined {auc_drop:.2f} AUC")
 
     geometry_alarm = peak_drift > 0.4 or max_ni > 0.4
     perf_alarm = acc_drop > 0.10 or auc_drop > 0.10
@@ -212,40 +212,40 @@ def _retrain_verdict(batch_results):
 
     if geometry_alarm and perf_alarm:
         verdict = "retrain"
-        label = "Retraining Recommended"
+        label = "Model Recalibration Required"
         reason = (
-            "Both embedding geometry and classifier performance have degraded significantly. "
+            "Both patient feature representations and diagnostic performance have degraded significantly across incoming cohorts. "
             f"Triggered by: {', '.join(signals)}. "
-            "The model's internal representations no longer reflect the current data distribution — retraining on recent data is advised."
+            "The model no longer reflects the current patient population — recalibration on recent clinical data is advised."
         )
     elif geometry_alarm and not perf_alarm:
         verdict = "monitor"
-        label = "Monitor Closely — Geometric Drift Detected"
+        label = "Clinical Surveillance Advisory — Population Shift Detected"
         reason = (
-            "Embedding geometry has shifted substantially but classifier performance is still holding. "
-            f"Triggered by: {', '.join(signals) if signals else 'elevated drift score'}. "
-            "This is an early warning: performance degradation may follow. Schedule a retraining review."
+            "Patient feature representations have shifted substantially but diagnostic performance is still holding. "
+            f"Triggered by: {', '.join(signals) if signals else 'elevated population drift index'}. "
+            "This is an early warning signal: diagnostic degradation may follow as the patient population continues to shift. Schedule a recalibration review."
         )
     elif geometry_warn or perf_warn:
         verdict = "monitor"
-        label = "Mild Drift — Continue Monitoring"
+        label = "Mild Population Drift — Continued Surveillance Recommended"
         reason = (
-            "Moderate drift detected in embedding space or performance metrics, but below retraining thresholds. "
-            "Keep monitoring across future batches before taking action."
+            "Moderate shift detected in patient feature representations or diagnostic performance, but below recalibration thresholds. "
+            "Continue monitoring incoming patient cohorts before taking action."
         )
     else:
         verdict = "stable"
-        label = "No Retraining Needed"
+        label = "Clinical Model Performance Stable"
         reason = (
-            "Embedding geometry and classifier performance are stable across all batches. "
-            "Distribution shift is within acceptable bounds."
+            "Patient feature representations and diagnostic performance are stable across all incoming cohorts. "
+            "Population shift is within acceptable clinical bounds — no intervention required."
         )
 
     return verdict, label, reason, {
-        "Peak Drift Score": f"{peak_drift:.3f}",
-        "Max Neighbor Instability": f"{max_ni:.3f}",
-        "Accuracy Drop": f"{acc_drop:.1%}",
-        "AUC Drop": f"{auc_drop:.3f}",
+        "Population Drift Index": f"{peak_drift:.3f}",
+        "Patient Similarity Instability": f"{max_ni:.3f}",
+        "Diagnostic Accuracy Decline": f"{acc_drop:.1%}",
+        "Discriminative Performance Decline (AUC)": f"{auc_drop:.3f}",
     }
 
 
@@ -253,9 +253,9 @@ verdict, label, reason, signal_vals = _retrain_verdict(batch_results)
 
 _colors = {"retrain": "error", "monitor": "warning", "stable": "success"}
 _icons  = {"retrain": "🔴", "monitor": "🟡", "stable": "🟢"}
-getattr(st, _colors[verdict])(f"**{_icons[verdict]} Retraining Verdict: {label}**\n\n{reason}")
+getattr(st, _colors[verdict])(f"**{_icons[verdict]} Clinical Model Status: {label}**\n\n{reason}")
 
-with st.expander("Signal breakdown"):
+with st.expander("Clinical signal breakdown"):
     cols = st.columns(len(signal_vals))
     for col, (k, v) in zip(cols, signal_vals.items()):
         col.metric(k, v)
@@ -266,8 +266,8 @@ st.divider()
 scores = [r.drift_score.score for r in batch_results]
 final_score = scores[-1]
 col1, col2, col3 = st.columns(3)
-col1.metric("Final Drift Score", f"{final_score:.3f}", help="Composite geometric instability score [0–1]")
-col2.metric("Peak Drift Score", f"{max(scores):.3f}")
+col1.metric("Final Population Drift Index", f"{final_score:.3f}", help="Composite patient representation instability score [0–1]")
+col2.metric("Peak Population Drift Index", f"{max(scores):.3f}")
 summary = perf_tracker.summary()
 if summary:
     col3.metric("Mean ROC-AUC", f"{summary['roc_auc']['mean']:.3f}",
@@ -276,7 +276,7 @@ if summary:
 st.divider()
 
 tab_emb, tab_cluster, tab_retrieval, tab_perf = st.tabs([
-    "Embedding Space", "Cluster Dynamics", "Retrieval Stability", "Performance",
+    "Patient Feature Space", "Subgroup Dynamics", "Cohort Retrieval Stability", "Diagnostic Performance",
 ])
 
 with tab_emb:

@@ -119,13 +119,13 @@ def _retrain_verdict(batch_results_data: list[dict]) -> dict:
 
     signals = []
     if peak_drift > 0.4:
-        signals.append(f"peak drift score {peak_drift:.2f}")
+        signals.append(f"population drift index {peak_drift:.2f}")
     if max_ni > 0.4:
-        signals.append(f"neighbor instability {max_ni:.2f}")
+        signals.append(f"patient similarity instability {max_ni:.2f}")
     if acc_drop > 0.10:
-        signals.append(f"accuracy dropped {acc_drop:.0%}")
+        signals.append(f"diagnostic accuracy declined {acc_drop:.0%}")
     if auc_drop > 0.10:
-        signals.append(f"AUC dropped {auc_drop:.2f}")
+        signals.append(f"discriminative performance declined {auc_drop:.2f} AUC")
 
     geometry_alarm = peak_drift > 0.4 or max_ni > 0.4
     perf_alarm     = acc_drop > 0.10 or auc_drop > 0.10
@@ -134,44 +134,44 @@ def _retrain_verdict(batch_results_data: list[dict]) -> dict:
 
     if geometry_alarm and perf_alarm:
         verdict = "retrain"
-        label   = "Retraining Recommended"
+        label   = "Model Recalibration Required"
         reason  = (
-            "Both embedding geometry and classifier performance have degraded significantly. "
+            "Both patient feature representations and diagnostic performance have degraded significantly across incoming cohorts. "
             f"Triggered by: {', '.join(signals)}. "
-            "The model's internal representations no longer reflect the current data distribution — retraining on recent data is advised."
+            "The model no longer reflects the current patient population — recalibration on recent clinical data is advised."
         )
     elif geometry_alarm and not perf_alarm:
         verdict = "monitor"
-        label   = "Monitor Closely — Geometric Drift Detected"
+        label   = "Clinical Surveillance Advisory — Population Shift Detected"
         reason  = (
-            "Embedding geometry has shifted substantially but classifier performance is still holding. "
-            f"Triggered by: {', '.join(signals) if signals else 'elevated drift score'}. "
-            "This is an early warning: performance degradation may follow. Schedule a retraining review."
+            "Patient feature representations have shifted substantially but diagnostic performance is still holding. "
+            f"Triggered by: {', '.join(signals) if signals else 'elevated population drift index'}. "
+            "This is an early warning signal: diagnostic degradation may follow as the patient population continues to shift. Schedule a recalibration review."
         )
     elif geometry_warn or perf_warn:
         verdict = "monitor"
-        label   = "Mild Drift — Continue Monitoring"
+        label   = "Mild Population Drift — Continued Surveillance Recommended"
         reason  = (
-            "Moderate drift detected in embedding space or performance metrics, but below retraining thresholds. "
-            "Keep monitoring across future batches before taking action."
+            "Moderate shift detected in patient feature representations or diagnostic performance, but below recalibration thresholds. "
+            "Continue monitoring incoming patient cohorts before taking action."
         )
     else:
         verdict = "stable"
-        label   = "No Retraining Needed"
+        label   = "Clinical Model Performance Stable"
         reason  = (
-            "Embedding geometry and classifier performance are stable across all batches. "
-            "Distribution shift is within acceptable bounds."
+            "Patient feature representations and diagnostic performance are stable across all incoming cohorts. "
+            "Population shift is within acceptable clinical bounds — no intervention required."
         )
 
     return {
         "verdict": verdict,
-        "label": label,
-        "reason": reason,
+        "label":   label,
+        "reason":  reason,
         "signals": {
-            "peak_drift_score":       round(peak_drift, 3),
-            "max_neighbor_instability": round(max_ni, 3),
-            "accuracy_drop":          round(acc_drop, 3),
-            "auc_drop":               round(auc_drop, 3),
+            "population_drift_index":         round(peak_drift, 3),
+            "patient_similarity_instability":  round(max_ni, 3),
+            "diagnostic_accuracy_decline":     round(acc_drop, 3),
+            "discriminative_performance_decline": round(auc_drop, 3),
         },
     }
 
