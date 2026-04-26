@@ -178,10 +178,10 @@ def _retrain_verdict(batch_results_data: list[dict]) -> dict:
         "label":   label,
         "reason":  reason,
         "signals": {
-            "population_drift_index":         round(peak_drift, 3),
-            "patient_similarity_instability":  round(max_ni, 3),
-            "diagnostic_accuracy_decline":     round(acc_drop, 3),
-            "discriminative_performance_decline": round(auc_drop, 3),
+            "peak_drift_score":           round(peak_drift, 3),
+            "max_neighbor_instability":   round(max_ni, 3),
+            "accuracy_drop":              round(acc_drop, 3),
+            "auc_drop":                   round(auc_drop, 3),
         },
     }
 
