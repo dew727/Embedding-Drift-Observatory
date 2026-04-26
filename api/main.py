@@ -83,6 +83,16 @@ def _to_list(arr) -> list:
     return arr
 
 
+def _safe_float(v) -> float | None:
+    """Return None for nan/inf so JSON stays valid. JSON has no NaN literal."""
+    if v is None:
+        return None
+    try:
+        return None if (v != v or v == float("inf") or v == float("-inf")) else round(float(v), 4)
+    except (TypeError, ValueError):
+        return None
+
+
 def _emb_2d(emb: np.ndarray) -> list[list[float]]:
     """Return first 2 dimensions of embeddings for scatter plot."""
     return emb[:, :2].tolist()
@@ -273,18 +283,15 @@ def run(req: RunRequest) -> dict[str, Any]:
         drift_score     = compute_drift_score(mean_cos, mean_euc, nb_instability,
                                               float(centroid_shifts.mean()), reassign_rate)
 
+        metrics = None
         try:
             metrics = evaluate_batch(clf, drift_emb, batch.y, batch_index=i)
-            accuracy = metrics.accuracy
-            f1       = metrics.f1
-            roc_auc  = metrics.roc_auc
-            frac_pos = _to_list(metrics.fraction_of_positives)
+            frac_pos  = _to_list(metrics.fraction_of_positives)
             mean_pred = _to_list(metrics.mean_predicted_value)
         except Exception:
-            accuracy = f1 = roc_auc = None
             frac_pos = mean_pred = []
 
-        if metrics:
+        if metrics is not None:
             perf_tracker.log(metrics)
 
         sampled_baseline_2d, sampled_drift_2d = _sample_embedding_pairs(
@@ -304,9 +311,9 @@ def run(req: RunRequest) -> dict[str, Any]:
             "mean_centroid_shift": round(drift_score.mean_centroid_shift, 4),
             "reassignment_rate":   round(reassign_rate, 4),
             "centroid_shifts":     _to_list(centroid_shifts.round(4)),
-            "accuracy":            round(accuracy, 4) if accuracy is not None else None,
-            "f1":                  round(f1, 4) if f1 is not None else None,
-            "roc_auc":             round(roc_auc, 4) if roc_auc is not None else None,
+            "accuracy":  _safe_float(metrics.accuracy  if metrics else None),
+            "f1":        _safe_float(metrics.f1        if metrics else None),
+            "roc_auc":   _safe_float(metrics.roc_auc   if metrics else None),
             "calibration": {
                 "fraction_of_positives": frac_pos,
                 "mean_predicted_value":  mean_pred,
